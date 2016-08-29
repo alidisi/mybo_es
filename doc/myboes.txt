@@ -1,0 +1,13 @@
+0.安装pip(注:用以下方法安装的pip比较完整,不要用apt-get安装) ,
+	wget https://bootstrap.pypa.io/get-pip.py  --no-check-certificate
+	sudo python get-pip.py
+1.安装gunicorn , sudo pip install gunicorn;
+2.安装supervisor, sudo pip install supervisor;
+3.生成supervisor配置文件, sudo echo_supervisord_conf > /etc/supervisor/supervisord.conf;
+4.打开 supervisor.conf 在最底部添加 如 supervisord.conf 中 mybo_es 的配置项;
+5.启动supervisor supervisord -c /etc/supervisor/supervisord.conf
+6.启动mybo_es进程,sudo supervisorctl start mybo_es;
+7.其他命令  ：
+		1) 重启mybo_es进程 sudo supervisorctl restart mybo_es
+		2) 关闭mybo_es进程 sudo supervisorctl stop mybo_es
+		...

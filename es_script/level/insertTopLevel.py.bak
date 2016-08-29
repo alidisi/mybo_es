@@ -1,0 +1,174 @@
+#!/usr/bin/env python 
+#coding:utf-8
+
+import MySQLdb as mysql
+import time
+
+
+
+
+import sys
+sys.path.append('../')
+from functions import es_con
+from functions import mysqlConf
+
+
+def insertTopLevel(es,startTime,endTime):
+	print "starting get the TOP  level...."
+	esBody={"fields":["uuid","channel","map_version","map_name","level","win"],"query": {"filtered": {"query": {"query_string": {"analyze_wildcard": True,"query": 'LogType:scoreLog'}},"filter": {"bool": {"must": [{"range": {"actTime": {"gte": 0,"lte": 0}}}],"must_not": []}}}}}
+	esBody['query']['filtered']['filter']['bool']['must'][0]['range']['actTime']['gte'] =startTime
+        esBody['query']['filtered']['filter']['bool']['must'][0]['range']['actTime']['lte'] = endTime
+	result = es.esSearch(esBody)
+	linkMysql(result,startTime)
+
+def linkMysql(result,startTime):
+        conn = mysqlConf.connMysql()
+        cursor = conn.cursor()
+        print "insert TOP level  to TOPLevel....."
+	dateTime = time.localtime(startTime)
+	dateTime = time.strftime("%Y-%m-%d",dateTime)
+        for item in result:
+		TOPLevel = getTopLevel(item['uuid'][0],item['level'][0],cursor)
+		code = createOrUpdate(item['uuid'][0],startTime,cursor)
+                insertSql = "INSERT INTO es_query_topLevel(actTime,uuid,channel,mapName,mapVersion,topLevel,win,dateTime) VALUES('%d','%s','%s','%s','%d','%d','%d','%s')" %(startTime,item['uuid'][0],item['channel'][0],item['map_name'][0],item['map_version'][0],TOPLevel,item['win'][0],dateTime)
+                updateSql1 = "UPDATE es_query_topLevel SET topLevel='%d',win='0'  where uuid='%s' AND actTime='%d' " %(TOPLevel,item['uuid'][0],startTime)
+                updateSql2 = "UPDATE es_query_topLevel SET topLevel='%d',win='1' where uuid='%s' AND actTime='%d'" %(TOPLevel,item['uuid'][0],startTime)
+		try:
+			if (0 == code):
+			#	print insertSql
+				cursor.execute(insertSql)
+			else:
+				if (1 == item['win'][0] or 5 == item['win'][0]):
+			#		print updateSql2
+					cursor.execute(updateSql2)
+				else:
+			#		print updateSql2
+					cursor.execute(updateSql1)
+		except mysql.Error,e:
+			conn.rollback()
+			print "rollback",e
+	conn.commit()
+        conn.close()
+def getTopLevel(uuid,level,cursor):
+#	print "get TOP Level"
+	sql= "SELECT topLevel FROM es_query_topLevel where uuid='%s' ORDER BY toplevel DESC LIMIT 1" %uuid
+	code = cursor.execute(sql)
+	if (0 == code):
+		topLevel = level
+	else:
+		data = cursor.fetchall()
+		print data
+		if (data[0][0] >= level):
+			topLevel = data[0][0]
+		else:
+			topLevel = level
+	return topLevel
+def createOrUpdate(uuid,startTime,cursor):
+#	print "update or create"
+	sql = "SELECT * FROM es_query_topLevel WHERE uuid='%s' AND actTime='%d' " %(uuid,startTime)
+	code = cursor.execute(sql)
+	if (0 == code):
+		return 0
+	else:
+		return 1
+class stopAndLose(object):
+	def __init__(self):
+		self.conn = mysqlConf.connMysql()
+		self.cursor = conn.cursor()
+#根据传入的时间从es_query_topLevel 中拉去所有DAU 的uuid
+	def getDataSet(sqltime):
+	#	conn = mysqlConf.connMysql()
+	#	cursor = conn.cursor()
+		sql = "SELECT uuid FROM es_query_topLevel WHERE actTime='%d'" %sqltime
+		self.cursor.execute(sql)
+		data = self.cursor.fetchall()
+		dataSet = set([])
+		for item in data:
+			dataSet.add(item[0])
+		self.conn.commit()
+	#	self.conn.close()
+		return dataSet
+	def addDenom(self,level1,level2,denom):
+		for i in range(level1[0],level2[0]):
+			denom[i] = denom[i] + 1
+		return denom
+	
+#计算流失和停滞用户的分母denom是各个关卡的分母数据 denomSet是符合条件的uuid集合                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        
+	def getDenom(self,data,startTime):
+	#	conn = mysqlConf.connMysql()
+	#	cursor = conn.cursor()
+		sqlTime1 = startTime -4*86400
+		sqlTime2 = startTime - 3*86400
+		denom = [0]*280
+		denomSet = set()
+		for item in data:
+			#这里可以通过 sql1拿到的topLevel 到sql2中判断sql2中的topLevel 是否大于sql1中的topLevel
+			sql1 = "SELECT topLevel  FROM es_query_topLevel WHERE actTime='%d' AND uuid='%s'" %(sqlTime1,item)
+			sql2 = "SELECT topLevel  FROM es_query_topLevel WHERE actTime='%d' AND uuid='%s'" %(sqlTime2,item)
+			self.cursor.execute(sql1)
+			self.level1 = cursor.fetchone()
+			self.cursor.execute(sql2)
+			level2 = cursor.fetchone()
+			if (level2 > level1):
+				denom = addDenom(level1,level2,denom)
+				denomSet.add(item)
+		return (denom,denomSet)
+	def getLoseMolecule(self,denomSet,setDict0,setDict1,setDict2,startTime):
+		molecule = [0]*280
+		set1 = denomSet -(setDict0 & denomSet)
+		set2 = set1 - (setDict1 & set1)
+		set3 = set2 - (setDict2 & set2)
+		(molecule,moleculeSet) = getDenom(set3,startTime)
+		return  molecule
+
+	def getStopMolecule(self,stopSet,loseMolecule,startTime):
+		secondDay = startTime - 86400*3
+		print secondDay
+		stopMolecule = loseMolecule[:]
+		for item in stopSet:
+			sql1 = "SELECT topLevel FROM es_query_topLevel WHERE actTime='%d' AND uuid='%s' " %(secondDay,item)
+			self.cursor.execute(sql1)
+			data = self.cursor.fetchall()
+			stopLevel = data[0][0]
+			sql2 = "SELECT topLevel FROM es_query_topLevel WHERE actTime>='%d' AND actTime<='%d' AND uuid='%s' AND topLevel>'%d'" %(startTime-86400*2,startTime,item,stopLevel)
+			code = self.cursor.execute(sql2)
+			if (0 == code):
+				stopMolecule[stopLevel-1] += 1
+		return stopMolecule
+#同时返回流失用户数的  list 和用户流失率的list
+	def getLoseUserCounts(self,startTime):
+		setDict = {}
+		for i in range(5):
+			sqlTime = startTime -i*86400
+			setDict[i] = getDataSet(sqlTime)
+	#第一天和第二天都活跃的用户的一个集合 allSet
+		allSet = setDict[3] & setDict[4]
+	#allSet 中过滤出在第二天中topLevel大于第一天中topLevel的loseSet,并返回各个关卡的分布情况
+		(denom,loseSet) = getDenom(allSet,startTime)
+	#在loseSet 中选出在第三，四，五，天都没有活跃的用户，返回各个关卡的分布情况
+		loseMolecule = getLoseMolecule(loseSet,setDict[0],setDict[1],setDict[2],startTime)
+		loseUserRate = [0]*280
+		stopUserRate = [0]*280
+	#在allSet中去掉在第三，四，五关都没有活跃的用户，减少计算的次数，
+		stopSet = allSet - loseSet
+	#把stopSet 当参数 并把 流失用户的关卡分布，lose uesr 也是stop user 的一部分
+		stopMolecule = getStopMolecule(stopSet,loseMolecule,startTime)
+#	print "the get loser counts loserMolecule",loseMolecule
+#	print "the get loser counts stopMolecule",stopMolecule
+		bb = zip(denom,loseMolecule,stopMolecule)
+		i = 0
+		for denom,lose,stop in bb:
+			denom = float(denom)
+			lose  = float(lose)
+			stop  = float(stop)
+			if(0 == denom):
+				i+=1
+			else:
+				loseRate = "%.2f" %(lose/denom*100)
+				stopRate = "%.2f" %(stop/denom*100)
+				loseUserRate[i]=loseRate
+				stopUserRate[i]=stopRate
+				i+=1
+#	print "the lose user rate is:",loseUserRate
+#	print "the stop user rate is:" ,stopUserRate
+		return (loseMolecule,stopMolecule,loseUserRate,stopUserRate)
